@@ -4,27 +4,40 @@ import os
 import re
 import time
 
+import streamlit as st
 from dotenv import load_dotenv
 from google import genai
 
 load_dotenv()
 
-# Try alternative models if one is unavailable.
 MODEL_NAMES = [
     "gemini-2.5-flash",
     "gemini-2.0-flash",
 ]
 
 
+def get_secret(name):
+    """Read configuration from environment variables or Streamlit Secrets."""
+    value = os.getenv(name, "").strip()
+
+    if value:
+        return value
+
+    try:
+        return str(st.secrets.get(name, "")).strip()
+    except Exception:
+        return ""
+
+
 def generate_keywords(title, description="", count=5):
     """Generate keyword suggestions, not verified search volumes."""
 
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = get_secret("GEMINI_API_KEY")
 
     if not api_key:
         return {
             "success": False,
-            "error": "GEMINI_API_KEY is missing. Check your .env file.",
+            "error": "GEMINI_API_KEY is missing from the configuration.",
         }
 
     title = (title or "").strip()
@@ -61,7 +74,6 @@ Avoid duplicate or irrelevant keywords.
         errors = []
 
         for model_name in MODEL_NAMES:
-            # Retry temporary overload once before trying the next model.
             for attempt in range(2):
                 try:
                     response = client.models.generate_content(
@@ -69,15 +81,15 @@ Avoid duplicate or irrelevant keywords.
                         contents=prompt,
                     )
 
-                    text = (response.text or "").strip()
-                    text = re.sub(
+                    response_text = (response.text or "").strip()
+                    response_text = re.sub(
                         r"^```(?:json)?\s*|\s*```$",
                         "",
-                        text,
+                        response_text,
                         flags=re.IGNORECASE,
                     ).strip()
 
-                    result = json.loads(text)
+                    result = json.loads(response_text)
                     items = result.get("keywords", [])
 
                     cleaned = []
@@ -115,13 +127,11 @@ Avoid duplicate or irrelevant keywords.
                     errors.append(f"{model_name}: {exc}")
                     error_text = str(exc)
 
-                    # Retry only temporary server overloads.
                     if "503" in error_text or "UNAVAILABLE" in error_text:
                         if attempt == 0:
                             time.sleep(2)
                             continue
 
-                    # Try the next model for other errors as well.
                     break
 
         return {
