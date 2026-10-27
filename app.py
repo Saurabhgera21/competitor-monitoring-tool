@@ -27,7 +27,6 @@ st.set_page_config(
 
 create_database()
 
-# Initialize session state.
 defaults = {
     "new_articles": [],
     "new_price_changes": [],
@@ -35,6 +34,8 @@ defaults = {
     "scan_message": "",
     "scan_error": "",
     "keyword_results": {},
+    "slack_test_message": "",
+    "slack_test_success": False,
 }
 
 for key, value in defaults.items():
@@ -73,7 +74,7 @@ if page == "Dashboard":
 
     try:
         competitors = get_tracked_competitors()
-        all_changes = get_pricing_changes()
+        get_pricing_changes()
     except Exception as exc:
         st.error(f"Could not load dashboard data: {exc}")
         st.stop()
@@ -99,7 +100,6 @@ if page == "Dashboard":
     st.subheader("Add or scan a competitor")
 
     with st.form("competitor_scan_form"):
-
         domain = st.text_input(
             "Competitor website",
             placeholder="https://www.shopify.com",
@@ -111,16 +111,13 @@ if page == "Dashboard":
         )
 
     if submitted:
-
         if not domain.strip():
             st.warning("Please enter a competitor website.")
 
         else:
             normalized_domain = domain.strip()
 
-            if not normalized_domain.startswith(
-                ("http://", "https://")
-            ):
+            if not normalized_domain.startswith(("http://", "https://")):
                 normalized_domain = "https://" + normalized_domain
 
             st.session_state.scan_error = ""
@@ -146,16 +143,13 @@ if page == "Dashboard":
                 else:
                     articles = results.get("articles", [])
                     pricing_items = results.get("pricing_items", [])
-
                     competitor_url = normalized_domain.rstrip("/")
 
-                    # Save newly discovered articles.
                     new_articles = save_articles(
                         competitor_url,
                         articles,
                     )
 
-                    # Save prices and detect price changes.
                     price_changes = save_pricing_data(
                         competitor_url,
                         pricing_items,
@@ -171,12 +165,8 @@ if page == "Dashboard":
                         f"{len(pricing_items)} price item(s) found."
                     )
 
-                    # ------------------------------------------
-                    # SEND SLACK ALERTS
-                    # ------------------------------------------
-
+                    # Send Slack alerts only when changes are detected.
                     if new_articles or price_changes:
-
                         alert_lines = [
                             "🔎 Competitor Monitoring Alert",
                             f"Website: {competitor_url}",
@@ -184,7 +174,6 @@ if page == "Dashboard":
                             f"Pricing changes: {len(price_changes)}",
                         ]
 
-                        # Include up to five new articles.
                         for article in new_articles[:5]:
                             alert_lines.append(
                                 f"\nNew article: "
@@ -192,44 +181,34 @@ if page == "Dashboard":
                             )
 
                             article_url = article.get("url", "")
-
                             if article_url:
                                 alert_lines.append(article_url)
 
-                        # Include up to five pricing changes.
                         for change in price_changes[:5]:
                             alert_lines.append(
                                 f"\nPrice change: "
                                 f"{change.get('product_name', 'Product')}"
                             )
-
                             alert_lines.append(
                                 f"{change.get('old_price', 'Unknown')} "
                                 f"→ {change.get('new_price', 'Unknown')}"
                             )
 
                             price_url = change.get("url", "")
-
                             if price_url:
                                 alert_lines.append(price_url)
 
-                        try:
-                            success, message = send_slack_alert(
-                                "\n".join(alert_lines)
+                        success, message = send_slack_alert(
+                            "\n".join(alert_lines)
+                        )
+
+                        if success:
+                            st.session_state.scan_message += (
+                                " Slack alert sent successfully."
                             )
-
-                            if success:
-                                st.session_state.scan_message += (
-                                    " Slack alert sent successfully."
-                                )
-                            else:
-                                st.session_state.scan_error = (
-                                    f"Slack notification failed: {message}"
-                                )
-
-                        except Exception as exc:
+                        else:
                             st.session_state.scan_error = (
-                                f"Slack notification failed: {exc}"
+                                f"Slack notification failed: {message}"
                             )
 
             except Exception as exc:
@@ -243,47 +222,26 @@ if page == "Dashboard":
     if st.session_state.scan_message:
         st.success(st.session_state.scan_message)
 
-    # ------------------------------------------
-    # DISPLAY NEW ARTICLES
-    # ------------------------------------------
-
+    # Display new articles.
     if st.session_state.new_articles:
-
         st.subheader("New articles found")
 
-        for index, article in enumerate(
-            st.session_state.new_articles
-        ):
-
-            article_title = article.get(
-                "title",
-                "Untitled article",
-            )
-
+        for index, article in enumerate(st.session_state.new_articles):
+            article_title = article.get("title", "Untitled article")
             article_url = article.get("url", "")
-
-            article_description = (
-                article.get("description") or ""
-            )
+            article_description = article.get("description") or ""
 
             st.markdown(f"### {article_title}")
-
-            st.write(
-                article_description or "No description available."
-            )
+            st.write(article_description or "No description available.")
 
             if article_url:
                 st.markdown(f"[Read article]({article_url})")
 
-            # Generate SEO keywords.
             if st.button(
                 "🔑 Generate SEO Keywords",
                 key=f"generate_keywords_{index}",
             ):
-
-                with st.spinner(
-                    "Gemini is generating keywords..."
-                ):
+                with st.spinner("Gemini is generating keywords..."):
                     keyword_result = generate_keywords(
                         article_title,
                         article_description,
@@ -293,37 +251,26 @@ if page == "Dashboard":
                     article_url or article_title
                 ] = keyword_result
 
-            # Display generated keywords.
             result_key = article_url or article_title
-
-            keyword_result = st.session_state.keyword_results.get(
-                result_key
-            )
+            keyword_result = st.session_state.keyword_results.get(result_key)
 
             if keyword_result:
-
                 if keyword_result.get("success"):
-
                     st.markdown("**Suggested SEO Keywords**")
 
                     for item in keyword_result.get("keywords", []):
-                        st.markdown(
-                            f"- **{item.get('keyword', '')}**"
-                        )
-
+                        st.markdown(f"- **{item.get('keyword', '')}**")
                         st.caption(item.get("reason", ""))
 
                     st.caption(
-                        "Generated by: "
-                        f"{keyword_result.get('source', 'Gemini')}"
+                        f"Generated by: {keyword_result.get('source', 'Gemini')}"
                     )
 
                     st.info(
                         "Monthly search volume: Not available. "
-                        "These are AI-generated keyword suggestions, "
-                        "not verified search-volume data."
+                        "These are AI-generated suggestions, not verified "
+                        "search-volume data."
                     )
-
                 else:
                     st.error(
                         keyword_result.get(
@@ -334,16 +281,11 @@ if page == "Dashboard":
 
             st.divider()
 
-    # ------------------------------------------
-    # DISPLAY PRICE CHANGES
-    # ------------------------------------------
-
+    # Display price changes.
     if st.session_state.new_price_changes:
-
         st.subheader("Price changes found")
 
         for change in st.session_state.new_price_changes:
-
             st.write(
                 f"**{change.get('product_name', 'Product')}**: "
                 f"{change.get('old_price', 'Unknown')} "
@@ -351,9 +293,7 @@ if page == "Dashboard":
             )
 
             if change.get("url"):
-                st.markdown(
-                    f"[Open pricing page]({change['url']})"
-                )
+                st.markdown(f"[Open pricing page]({change['url']})")
 
     if (
         st.session_state.scan_message
@@ -371,7 +311,6 @@ if page == "Dashboard":
 # --------------------------------------------------
 
 elif page == "Competitors":
-
     st.header("Tracked Competitors")
 
     try:
@@ -380,11 +319,8 @@ elif page == "Competitors":
         if competitors:
             for competitor in competitors:
                 st.markdown(f"- 🌐 {competitor}")
-
         else:
-            st.info(
-                "No tracked competitors yet. Scan a website first."
-            )
+            st.info("No tracked competitors yet. Scan a website first.")
 
     except Exception as exc:
         st.error(f"Could not load competitors: {exc}")
@@ -395,7 +331,6 @@ elif page == "Competitors":
 # --------------------------------------------------
 
 elif page == "Saved Articles":
-
     st.header("Saved Articles")
 
     try:
@@ -413,43 +348,26 @@ elif page == "Saved Articles":
             articles = get_articles(selected_competitor)
 
             if articles:
-
                 for index, article in enumerate(articles):
-
-                    article_title = article.get(
-                        "title",
-                        "Untitled article",
-                    )
-
+                    article_title = article.get("title", "Untitled article")
                     article_url = article.get("url", "")
-
-                    article_description = (
-                        article.get("description") or ""
-                    )
+                    article_description = article.get("description") or ""
 
                     st.subheader(article_title)
 
                     if article_url:
-                        st.markdown(
-                            f"[Open article]({article_url})"
-                        )
+                        st.markdown(f"[Open article]({article_url})")
 
                     st.write(
                         article_description or "No description available."
                     )
-
-                    st.caption(
-                        f"First seen: {article['first_seen']}"
-                    )
+                    st.caption(f"First seen: {article['first_seen']}")
 
                     if st.button(
                         "🔑 Generate SEO Keywords",
                         key=f"saved_keywords_{index}",
                     ):
-
-                        with st.spinner(
-                            "Gemini is generating keywords..."
-                        ):
+                        with st.spinner("Gemini is generating keywords..."):
                             result = generate_keywords(
                                 article_title,
                                 article_description,
@@ -460,28 +378,20 @@ elif page == "Saved Articles":
                         ] = result
 
                     result_key = article_url or article_title
-
-                    keyword_result = (
-                        st.session_state.keyword_results.get(result_key)
+                    keyword_result = st.session_state.keyword_results.get(
+                        result_key
                     )
 
                     if keyword_result:
-
                         if keyword_result.get("success"):
-
                             st.markdown("**Suggested SEO Keywords**")
 
-                            for item in keyword_result.get(
-                                "keywords", []
-                            ):
-                                st.markdown(
-                                    f"- **{item.get('keyword', '')}**"
-                                )
-
+                            for item in keyword_result.get("keywords", []):
+                                st.markdown(f"- **{item.get('keyword', '')}**")
                                 st.caption(item.get("reason", ""))
 
                             st.caption(
-                                "Generated by: "
+                                f"Generated by: "
                                 f"{keyword_result.get('source', 'Gemini')}"
                             )
 
@@ -490,7 +400,6 @@ elif page == "Saved Articles":
                                 "AI-generated suggestions are not verified "
                                 "search-volume measurements."
                             )
-
                         else:
                             st.error(
                                 keyword_result.get(
@@ -502,9 +411,7 @@ elif page == "Saved Articles":
                     st.divider()
 
             else:
-                st.info(
-                    "No articles saved for this competitor yet."
-                )
+                st.info("No articles saved for this competitor yet.")
 
     except Exception as exc:
         st.error(f"Could not load saved articles: {exc}")
@@ -515,7 +422,6 @@ elif page == "Saved Articles":
 # --------------------------------------------------
 
 elif page == "Pricing History":
-
     st.header("Pricing History")
 
     try:
@@ -531,34 +437,23 @@ elif page == "Pricing History":
             )
 
             if selected_competitor == "All competitors":
-
                 prices = []
 
                 for competitor in competitors:
-                    prices.extend(
-                        get_current_prices(competitor)
-                    )
+                    prices.extend(get_current_prices(competitor))
 
                 changes = get_pricing_changes()
 
             else:
-                prices = get_current_prices(
-                    selected_competitor
-                )
-
-                changes = get_pricing_changes(
-                    selected_competitor
-                )
+                prices = get_current_prices(selected_competitor)
+                changes = get_pricing_changes(selected_competitor)
 
             st.subheader("Current observed prices")
 
             if prices:
-
                 for item in prices:
-
                     st.markdown(
-                        f"**{item['product_name']} — "
-                        f"{item['price']}**"
+                        f"**{item['product_name']} — {item['price']}**"
                     )
 
                     if item.get("url"):
@@ -566,10 +461,7 @@ elif page == "Pricing History":
                             f"[Open pricing page]({item['url']})"
                         )
 
-                    st.caption(
-                        f"Last checked: {item['last_checked']}"
-                    )
-
+                    st.caption(f"Last checked: {item['last_checked']}")
                     st.divider()
 
             else:
@@ -581,17 +473,14 @@ elif page == "Pricing History":
             st.subheader("Detected price changes")
 
             if changes:
-
                 for change in changes:
-
                     st.markdown(
                         f"**{change['competitor']} — "
                         f"{change['product_name']}**"
                     )
 
                     st.write(
-                        f"{change['old_price']} "
-                        f"→ {change['new_price']}"
+                        f"{change['old_price']} → {change['new_price']}"
                     )
 
                     if change.get("url"):
@@ -599,16 +488,11 @@ elif page == "Pricing History":
                             f"[Open pricing page]({change['url']})"
                         )
 
-                    st.caption(
-                        f"Detected: {change['detected_at']}"
-                    )
-
+                    st.caption(f"Detected: {change['detected_at']}")
                     st.divider()
 
             else:
-                st.info(
-                    "No price changes have been recorded yet."
-                )
+                st.info("No price changes have been recorded yet.")
 
     except Exception as exc:
         st.error(f"Could not load pricing history: {exc}")
@@ -619,29 +503,57 @@ elif page == "Pricing History":
 # --------------------------------------------------
 
 elif page == "Settings":
-
     st.header("Project Status")
 
     st.markdown("**Implemented**")
-
     st.write("- Article discovery and duplicate detection")
     st.write("- Article titles, descriptions, URLs, and date extraction")
     st.write("- Basic pricing-page discovery and price extraction")
     st.write("- SQLite storage for observed prices and price changes")
     st.write("- Dashboard, saved articles, and pricing history")
     st.write("- Gemini AI-generated SEO keyword suggestions")
-    st.write("- Slack notifications for newly discovered articles")
-    st.write("- Slack notifications for detected price changes")
+    st.write("- Slack notifications for new articles and price changes")
 
     st.markdown("**Still to implement**")
-
     st.write("- Verified monthly search-volume API integration")
     st.write("- Automated tests across three real competitor websites")
     st.write("- Deployment and demo recording")
 
+    st.divider()
+    st.subheader("Slack notification test")
+
+    st.write(
+        "Click the button below to send a test message to your configured "
+        "Slack channel. This test does not scan a website."
+    )
+
+    if st.button("📨 Send Test Slack Notification", type="primary"):
+        with st.spinner("Testing Slack connection..."):
+            try:
+                success, message = send_slack_alert(
+                    "✅ Test notification from Competitor Monitoring Alert Tool. "
+                    "Your Slack webhook is responding."
+                )
+
+                st.session_state.slack_test_success = success
+                st.session_state.slack_test_message = message
+
+            except Exception as exc:
+                st.session_state.slack_test_success = False
+                st.session_state.slack_test_message = str(exc)
+
+    if st.session_state.slack_test_message:
+        if st.session_state.slack_test_success:
+            st.success(st.session_state.slack_test_message)
+        else:
+            st.error(
+                "Slack test failed: "
+                f"{st.session_state.slack_test_message}"
+            )
+
     st.caption(
-        "Gemini suggests keywords but does not verify their monthly "
-        "search volumes. Pricing extraction is heuristic, and some sites "
-        "may not expose their prices in accessible HTML. Slack alerts "
-        "require a valid SLACK_WEBHOOK_URL in your .env file."
+        "Gemini suggests keywords but does not verify monthly search volumes. "
+        "Pricing extraction is heuristic, and some sites may not expose prices "
+        "in accessible HTML. Slack alerts require a valid SLACK_WEBHOOK_URL "
+        "in your local .env file or Streamlit Cloud Secrets."
     )
